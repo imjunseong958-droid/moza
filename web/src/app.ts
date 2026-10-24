@@ -58,6 +58,10 @@ const ONE_TAKE_REST_MS = 12 * 3600 * 1000;  // 12시간 쉬고 원테이크
 const FOCUS_EVERY = 15;                     // 음 5개부터 15레벨마다 약점 집중 연습
 const FOCUS_MIN_PITCHES = 5;
 const FAILS_BEFORE_EASIER = 10;             // 10번 연속 실패하면 쉬운 레벨로 돌아갈 수 있다
+const FIRST_TONE_DELAY_MS = 2800;           // 문제 화면이 뜨고 첫 음까지
+const FEEDBACK_GAP_MS = 4000;               // 정답을 알려주는 레벨: 답한 뒤 다음 음까지 (정답을 보는 시간)
+const NEXT_GAP_MS = 2400;                   // 정답을 안 알려주는 레벨·테스트: 답한 뒤 다음 음까지
+const AFTER_TONE_MS = 1600;                 // 앞 음이 끝나고 최소 이만큼 쉰 뒤 다음 음 (붙으면 비교 기준이 생긴다)
 const TEST_LABEL: Record<TestKind, string> = { pre: '사전 테스트', mid: '중간 점검', post: '사후 테스트' };
 const LOG_LIMIT = 5000;
 const STATS_LIMIT = 40;
@@ -734,7 +738,7 @@ function runTrials(cfg: RunConfig): void {
     for (const b of app.querySelectorAll('.pressed, .right, .wrong, .reveal')) b.classList.remove('pressed', 'right', 'wrong', 'reveal');
   };
 
-  timer = setTimeout(next, 700);
+  timer = setTimeout(next, FIRST_TONE_DELAY_MS);
 
   function next(): void {
     if (done) return;
@@ -796,8 +800,7 @@ function runTrials(cfg: RunConfig): void {
       }
     }
     i += 1;
-    // 다음 음은 이번 음이 완전히 끝난 뒤에 (겹치면 비교 기준이 생긴다)
-    const at = Math.max(now + (cfg.feedback ? 1000 : 600), cur.end + 400);
+    const at = Math.max(now + (cfg.feedback ? FEEDBACK_GAP_MS : NEXT_GAP_MS), cur.end + AFTER_TONE_MS);
     timer = setTimeout(next, at - performance.now());
   }
 }
