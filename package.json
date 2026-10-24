@@ -1,0 +1,27 @@
+{
+  "name": "moza",
+  "version": "0.1.0",
+  "private": true,
+  "description": "성인 절대음감 훈련 앱 (Wong et al., 2025 프로토콜)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjunseong958-droid/moza.git"
+  },
+  "type": "module",
+  "bin": {
+    "moza": "./moza"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "start": "./moza",
+    "check": "tsc -p . && tsc -p web",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2"
+  }
+}
