@@ -58,10 +58,7 @@ const ONE_TAKE_REST_MS = 12 * 3600 * 1000;  // 12시간 쉬고 원테이크
 const FOCUS_EVERY = 15;                     // 음 5개부터 15레벨마다 약점 집중 연습
 const FOCUS_MIN_PITCHES = 5;
 const FAILS_BEFORE_EASIER = 10;             // 10번 연속 실패하면 쉬운 레벨로 돌아갈 수 있다
-const FIRST_TONE_DELAY_MS = 2800;           // 문제 화면이 뜨고 첫 음까지
-const FEEDBACK_GAP_MS = 4000;               // 정답을 알려주는 레벨: 답한 뒤 다음 음까지 (정답을 보는 시간)
-const NEXT_GAP_MS = 2400;                   // 정답을 안 알려주는 레벨·테스트: 답한 뒤 다음 음까지
-const AFTER_TONE_MS = 1600;                 // 앞 음이 끝나고 최소 이만큼 쉰 뒤 다음 음 (붙으면 비교 기준이 생긴다)
+const AFTER_TONE_MS = 500;                  // 앞 음이 끝나고 이만큼 지나야 ▶로 다음 음 (붙으면 비교 기준이 생긴다)
 const TEST_LABEL: Record<TestKind, string> = { pre: '사전 테스트', mid: '중간 점검', post: '사후 테스트' };
 const LOG_LIMIT = 5000;
 const STATS_LIMIT = 40;
@@ -120,8 +117,8 @@ function render(name: string, html: string, acts: Actions = {}, onKey: KeyHandle
 }
 
 app.addEventListener('mousedown', (e) => {
-  // 건반이 포커스를 가져가면 Space에 다시 눌리므로 막는다
-  if ((e.target as Element).closest('.key, .out-key')) e.preventDefault();
+  // 건반·▶가 포커스를 가져가면 Space·Enter에 다시 눌리므로 막는다
+  if ((e.target as Element).closest('.key, .out-key, .orb')) e.preventDefault();
 });
 app.addEventListener('click', (e) => {
   const el = (e.target as Element).closest<HTMLElement>('[data-act]');
@@ -205,6 +202,7 @@ function aboutHTML(): string {
       <summary>이 앱은 어떻게 훈련하나요?</summary>
       <ul>
         <li>F 한 음에서 시작해 옆 음을 아래·위 번갈아 하나씩 늘려 12음까지 가요. 음마다 24단계, 모두 288레벨이에요.</li>
+        <li>문제마다 ▶(Enter)를 눌러야 음이 나와요. 준비가 됐을 때 직접 시작하면 돼요.</li>
         <li>단계가 오를수록 통과 기준이 20%에서 90%로 오르고 제한 시간이 줄어요. 마지막 단계는 음 1개일 때 1.18초, 12개일 때 2.03초예요.</li>
         <li>정답을 알려주는 레벨 다음에 알려주지 않는 레벨이 와요. 그 전에는 20초 셰퍼드 톤으로 방금 들은 음의 기억을 지워요.</li>
         <li>학습 중인 음 바로 바깥의 음도 섞여 나와요. 그럴 땐 "범위 밖"을 눌러요.</li>
@@ -632,7 +630,7 @@ function shepardThen(next: () => void, onQuit: () => void): void {
     <section class="card center shepard">
       <p class="eyebrow">기억 지우기</p>
       <div class="countdown" data-left>${left}</div>
-      <p class="muted">계속 내려가는 소리(셰퍼드 톤)를 듣는 동안 방금 들은 음의 기억이 흐려져요.<br>끝나면 정답을 알려주지 않는 문제가 바로 시작돼요.</p>
+      <p class="muted">계속 내려가는 소리(셰퍼드 톤)를 듣는 동안 방금 들은 음의 기억이 흐려져요.<br>끝나면 정답을 알려주지 않는 문제로 넘어가요.</p>
       <div class="sweep"><div style="animation-duration:${SHEPARD_SEC}s"></div></div>
       <button class="link" data-act="quit">그만하기</button>
     </section>
@@ -680,7 +678,8 @@ function trialHTML(cfg: RunConfig): string {
       <span class="count" data-count></span>
     </header>
     <section class="stage">
-      <div class="orb" data-orb>♪</div>
+      <button class="orb" data-act="play" data-orb aria-label="음 듣기">▶</button>
+      <p class="orb-hint muted small" data-hint>&nbsp;</p>
       <div class="timer"><div class="timer-fill" data-timer></div></div>
       <p class="feedback" data-fb>&nbsp;</p>
       <p class="star" data-star hidden>★ 2배 찬스</p>
@@ -693,21 +692,29 @@ function trialHTML(cfg: RunConfig): string {
     </footer>`;
 }
 
-// 문제를 하나씩 들려주고 답을 받는다. 반응 시간은 소리가 실제로 나온 순간부터 잰다.
+// 문제를 하나씩 들려주고 답을 받는다. 논문처럼 참가자가 ▶(Enter)를 눌러야 음이 나오고,
+// 반응 시간은 소리가 실제로 나온 순간부터 잰다.
 function runTrials(cfg: RunConfig): void {
   const total = cfg.trials.length;
   const results: TrialResult[] = [];
   let i = 0;
-  let accepting = false;
+  let ready = false;     // ▶를 누를 수 있음
+  let accepting = false; // 답을 받는 중
   let cur: (A.Playback & { t: Trial }) | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let done = false;
   let shownPoints = state.points;
 
   render(cfg.name, trialHTML(cfg), {
+    play: () => play(),
     answer: ({ pc }) => respond(Number(pc)),
     quit: () => cfg.onQuit(),
   }, (e) => {
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      e.preventDefault();
+      play();
+      return;
+    }
     if (e.code === 'Space' && cfg.allowOut) {
       e.preventDefault();
       respond(P.OUT);
@@ -729,7 +736,8 @@ function runTrials(cfg: RunConfig): void {
   const $count = find('count')!;
   const $fb = find('fb')!;
   const $timer = find('timer')!;
-  const $orb = find('orb')!;
+  const $orb = app.querySelector<HTMLButtonElement>('[data-orb]')!;
+  const $hint = find('hint')!;
   const $star = find('star')!;
   const $points = find('points');
   const mark = (pc: Answer, cls: string) =>
@@ -738,17 +746,32 @@ function runTrials(cfg: RunConfig): void {
     for (const b of app.querySelectorAll('.pressed, .right, .wrong, .reveal')) b.classList.remove('pressed', 'right', 'wrong', 'reveal');
   };
 
-  timer = setTimeout(next, FIRST_TONE_DELAY_MS);
+  showReady();
 
-  function next(): void {
-    if (done) return;
+  // ▶를 누를 수 있게 한다. 마지막 문제 뒤에는 결과 보기.
+  function showReady(): void {
+    ready = true;
+    $orb.disabled = false;
+    $orb.classList.add('ready');
+    $orb.textContent = '▶';
+    $count.textContent = `${Math.min(i + 1, total)} / ${total}`;
+    $hint.textContent = i >= total ? '눌러서 결과 보기 · Enter' : `눌러서 ${i === 0 ? '첫' : '다음'} 음 듣기 · Enter`;
+  }
+
+  function play(): void {
+    if (!ready || done) return;
+    ready = false;
     if (i >= total) {
       done = true;
       cfg.onDone(results);
       return;
     }
+    if (cfg.training) touch();
     const t = cfg.trials[i];
-    $count.textContent = `${i + 1} / ${total}`;
+    $orb.disabled = true;
+    $orb.classList.remove('ready');
+    $orb.textContent = '♪';
+    $hint.textContent = '음을 듣고 답을 고르세요';
     $fb.textContent = ' ';
     $fb.className = 'feedback';
     $star.hidden = !cfg.doubles.has(i);
@@ -800,8 +823,8 @@ function runTrials(cfg: RunConfig): void {
       }
     }
     i += 1;
-    const at = Math.max(now + (cfg.feedback ? FEEDBACK_GAP_MS : NEXT_GAP_MS), cur.end + AFTER_TONE_MS);
-    timer = setTimeout(next, at - performance.now());
+    $hint.textContent = ' ';
+    timer = setTimeout(showReady, Math.max(0, cur.end + AFTER_TONE_MS - performance.now()));
   }
 }
 
@@ -823,7 +846,7 @@ function showTestIntro(): void {
       <ul class="rules">
         <li>144문제: 피아노 72문제, 이어서 처음 듣는 기타 소리 72문제</li>
         <li>12음 × 3옥타브(C4–B6). 연속된 두 음은 항상 한 옥타브보다 멀리 떨어져 나와요</li>
-        <li>한 문제에 5초, 정답은 알려주지 않아요. 반음만 틀려도 오답이에요</li>
+        <li>문제마다 ▶(Enter)를 눌러 음을 들어요. 음이 나온 뒤 5초 안에 답해야 하고, 정답은 알려주지 않아요. 반음만 틀려도 오답이에요</li>
         <li>악기나 튜너 같은 기준음은 쓰지 마세요. 헤드폰을 권해요</li>
         <li>테스트 시간은 훈련 시간에 들어가지 않아요</li>
       </ul>
