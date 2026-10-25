@@ -1,9 +1,8 @@
 // 기록 저장: 로컬 서버(/api/state)를 거쳐 ~/.moza/state.json 에 쓴다
 
 import type { TestScore } from './protocol.ts';
-import type { TimeState } from './time.ts';
 
-export type LevelMode = 'level' | 'oneTake' | 'free';
+export type LevelMode = 'level' | 'oneTake';
 export type TestKind = 'pre' | 'mid' | 'post';
 
 export interface Progress {
@@ -14,8 +13,6 @@ export interface Progress {
   finalStreak: number;      // 레벨 288 연속 통과 횟수
   oneTake: boolean;         // 원테이크 도전 대기 중
   lockUntil: number | null; // 원테이크 전 12시간 휴식이 끝나는 시각
-  graduated: boolean;
-  graduatedAt: number | null;
 }
 
 export interface LevelLogEntry {
@@ -30,13 +27,16 @@ export interface LevelLogEntry {
 export interface TestEntry extends TestScore {
   t: number;
   kind: TestKind;
-  trainedMs: number;
+  round?: number; // 예전 기록에는 없음 (1회차)
   level: number;
 }
 
-export interface AppState extends TimeState {
+export interface AppState {
   version: 1;
   createdAt: number;
+  startDate: string | null; // 첫 훈련일 YYYY-MM-DD
+  round: number;            // 회차. 졸업하면 기록은 두고 F 1단계부터 다음 회차
+  graduations: number[];    // 졸업한 시각
   progress: Progress;
   points: number;
   tokens: number;
@@ -46,27 +46,29 @@ export interface AppState extends TimeState {
   tests: TestEntry[];
 }
 
+export function freshProgress(): Progress {
+  return {
+    n: 1,
+    level: 1,
+    failStreak: 0,
+    levelsSinceFocus: 0,
+    finalStreak: 0,
+    oneTake: false,
+    lockUntil: null,
+  };
+}
+
 export function freshState(): AppState {
   return {
     version: 1,
     createdAt: Date.now(),
     startDate: null,
-    progress: {
-      n: 1,
-      level: 1,
-      failStreak: 0,
-      levelsSinceFocus: 0,
-      finalStreak: 0,
-      oneTake: false,
-      lockUntil: null,
-      graduated: false,
-      graduatedAt: null,
-    },
+    round: 1,
+    graduations: [],
+    progress: freshProgress(),
     points: 0,
     tokens: 0,
     totalTrials: 0,
-    session: null,
-    sessions: [],
     pitchStats: {},
     levelLog: [],
     tests: [],

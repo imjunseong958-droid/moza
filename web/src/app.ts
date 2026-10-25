@@ -1,8 +1,8 @@
 // MOZA — 성인 절대음감 훈련 앱
-// 훈련 규칙은 protocol.ts, 소리는 audio.ts, 시간 계산은 time.ts, 저장은 store.ts에 있다.
+// 훈련 규칙은 protocol.ts, 소리는 audio.ts, 하루 목표 계산은 goal.ts, 저장은 store.ts에 있다.
 import * as P from './protocol.ts';
 import * as A from './audio.ts';
-import * as T from './time.ts';
+import * as G from './goal.ts';
 import * as S from './store.ts';
 import type { Answer, LevelSpec, PitchClass, Timbre, Trial, TrialResult } from './protocol.ts';
 import type { AppState, LevelMode, TestEntry, TestKind } from './store.ts';
@@ -26,7 +26,7 @@ interface RunConfig {
   activePcs: readonly PitchClass[];
   allowOut: boolean;
   doubles: Set<number>; // 점수 2배 문제 번호
-  training: boolean;    // 훈련 시간에 들어가는지
+  training: boolean;    // 훈련인지 (테스트가 아니라)
   onDone: (results: TrialResult[]) => void;
   onQuit: () => void;
 }
@@ -70,16 +70,15 @@ let actions: Actions = {};
 let keyHandler: KeyHandler | null = null;
 let stopCurrent: (() => void) | null = null; // 진행 중인 문제 루프나 카운트다운을 멈춘다
 let debugTrial: Trial | null = null;
+// 정답 안 알려주는 레벨을 끝낸 뒤 샘플을 듣지 않고 같은 레벨을 다시 하면 셰퍼드 톤을 건너뛴다.
+// 논문에서 셰퍼드 톤은 들은 샘플 음의 기억을 지우는 장치라, 이때는 지울 기억이 없다. 원테이크는 그대로 튼다.
+let shepardSkipLevel: number | null = null; // 그 레벨의 global 번호
+const skipsShepard = (spec: LevelSpec) => !spec.feedback && !state.progress.oneTake && shepardSkipLevel === spec.global;
 
 // ---------- 공통 ----------
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const sec = (ms: number) => `${parseFloat((ms / 1000).toFixed(2))}초`;
-const minutes = (ms: number) => `${Math.floor(ms / 60000)}분`;
-const clock = (ms: number) => {
-  const s = Math.floor(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-};
 const hoursMinutes = (ms: number) => {
   const m = Math.floor(ms / 60000);
   return m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`;
@@ -99,7 +98,7 @@ const onEnter = (fn: () => void): KeyHandler => (e) => {
 };
 const lockedNow = (now = Date.now()) => {
   const p = state.progress;
-  return !p.graduated && p.oneTake && now < (p.lockUntil ?? 0);
+  return p.oneTake && now < (p.lockUntil ?? 0);
 };
 
 function render(name: string, html: string, acts: Actions = {}, onKey: KeyHandler | null = null): void {
@@ -132,49 +131,24 @@ document.addEventListener('keydown', (e) => {
   keyHandler?.(e);
 });
 
-function touch(): void {
-  T.markActivity(state);
-  S.save(state);
-  updateClocks();
-}
-
-function clockText(): string {
-  const sess = T.sessionMs(state);
-  const text = `오늘 ${minutes(T.todayMs(state))} / 25분`;
-  return sess > 0 && sess < T.MIN_SESSION_MS ? `${text} · 세션 ${clock(sess)} (15분부터 인정)` : text;
-}
+const todayCount = () => G.todayCount(state.levelLog);
 
 function updateClocks(): void {
-  for (const el of app.querySelectorAll('[data-clock]')) el.textContent = clockText();
-}
-
-function tick(): void {
-  if (T.endIdleSession(state)) {
-    S.save(state);
-    if (screen === 'train' || screen === 'shepard') {
-      showHome('3분 동안 입력이 없어서 세션을 끝냈어요. 하던 레벨은 기록되지 않았어요.');
-      return;
-    }
-  }
-  updateClocks();
+  for (const el of app.querySelectorAll('[data-clock]')) el.textContent = `오늘 ${todayCount()} / ${G.DAILY_GOAL}번`;
 }
 
 // ---------- 홈 ----------
 
-function ringSVG(countedMs: number, pendingMs: number): string {
+function ringSVG(count: number): string {
   const r = 52;
   const c = 2 * Math.PI * r;
-  const done = Math.min(1, countedMs / T.DAILY_GOAL_MS);
-  const pending = Math.min(1 - done, pendingMs / T.DAILY_GOAL_MS);
-  const arc = (frac: number, cls: string) =>
-    frac > 0 ? `<circle cx="60" cy="60" r="${r}" class="${cls}" stroke-dasharray="${frac * c} ${c}" transform="rotate(-90 60 60)"/>` : '';
+  const done = Math.min(1, count / G.DAILY_GOAL);
   return `
-    <svg viewBox="0 0 120 120" class="ring" aria-label="오늘 ${minutes(countedMs)} / 25분">
+    <svg viewBox="0 0 120 120" class="ring" aria-label="오늘 레벨 ${count} / ${G.DAILY_GOAL}번">
       <circle cx="60" cy="60" r="${r}" class="track"/>
-      ${arc(done + pending, 'pending')}
-      ${arc(done, 'done')}
-      <text x="60" y="62" class="ring-num">${Math.floor(countedMs / 60000)}</text>
-      <text x="60" y="82" class="ring-sub">/ 25분</text>
+      ${done > 0 ? `<circle cx="60" cy="60" r="${r}" class="done" stroke-dasharray="${done * c} ${c}" transform="rotate(-90 60 60)"/>` : ''}
+      <text x="60" y="62" class="ring-num">${count}</text>
+      <text x="60" y="82" class="ring-sub">/ ${G.DAILY_GOAL}번</text>
     </svg>`;
 }
 
@@ -202,13 +176,14 @@ function aboutHTML(): string {
       <summary>이 앱은 어떻게 훈련하나요?</summary>
       <ul>
         <li>F 한 음에서 시작해 옆 음을 아래·위 번갈아 하나씩 늘려 12음까지 가요. 음마다 24단계, 모두 288레벨이에요.</li>
+        <li>하루 목표는 레벨 24번 도전이에요. 떨어진 레벨도 1번으로 세요. 처음에는 하루에 음 하나(24단계)를 끝내는 셈이고, 뒤로 갈수록 한 음에 며칠씩 걸려요.</li>
         <li>문제마다 ▶(Enter)를 눌러야 음이 나와요. 준비가 됐을 때 직접 시작하면 돼요.</li>
         <li>단계가 오를수록 통과 기준이 20%에서 90%로 오르고 제한 시간이 줄어요. 마지막 단계는 음 1개일 때 1.18초, 12개일 때 2.03초예요.</li>
-        <li>정답을 알려주는 레벨 다음에 알려주지 않는 레벨이 와요. 그 전에는 20초 셰퍼드 톤으로 방금 들은 음의 기억을 지워요.</li>
+        <li>정답을 알려주는 레벨 다음에 알려주지 않는 레벨이 와요. 그 전에는 20초 셰퍼드 톤으로 방금 들은 음의 기억을 지워요. 같은 레벨을 다시 할 때는 샘플을 듣지 않았으면 건너뛰어요.</li>
         <li>학습 중인 음 바로 바깥의 음도 섞여 나와요. 그럴 땐 "범위 밖"을 눌러요.</li>
         <li>피아노 3옥타브(C4–B6)에서 무작위로 나와요. 높이가 아니라 음 이름(음 종류)을 익히는 훈련이에요.</li>
         <li>음 5개부터는 15레벨마다 가장 약한 음을 집중 연습해요.</li>
-        <li>마지막 레벨을 3번 연속 통과하고, 12시간 쉰 뒤 한 번에 다시 통과하면 졸업이에요.</li>
+        <li>마지막 레벨을 3번 연속 통과하고, 12시간 쉰 뒤 한 번에 다시 통과하면 졸업이에요. 졸업하면 기록은 그대로 두고 F 1단계부터 다음 회차를 시작해요.</li>
       </ul>
       <p class="muted">근거: Wong, Cheung, Ngan &amp; Wong (2025), Psychonomic Bulletin &amp; Review. 음악인 12명이 8주 동안 평균 21시간 훈련해서 평균 7개 음을 익혔고, 2명은 12음 전부를 익혔어요.</p>
     </details>`;
@@ -219,16 +194,12 @@ function showHome(notice = ''): void {
   const p = state.progress;
   const now = Date.now();
   const spec = P.levelSpec(p.n, p.level);
-  const sess = T.sessionMs(state);
-  const today = T.todayMs(state);
-  const total = T.totalMs(state);
-  const week = T.programWeek(state);
+  const today = todayCount();
   const fresh = !state.startDate;
   const locked = lockedNow(now);
-  const hasPost = state.tests.some((t) => t.kind === 'post');
   const next = p.n < 12 ? P.PITCH_ORDER[p.n] : null;
 
-  const trainLabel = p.graduated ? '계속 연습하기' : p.oneTake ? '원테이크 도전' : fresh ? '훈련 시작' : '훈련 계속하기';
+  const trainLabel = p.oneTake ? '원테이크 도전' : fresh ? '훈련 시작' : '훈련 계속하기';
   const train = locked
     ? `<button class="primary big" disabled>원테이크까지 ${hoursMinutes((p.lockUntil ?? now) - now)} 남음</button>`
     : `<button class="primary big" data-act="train">${trainLabel} <kbd>Enter</kbd></button>`;
@@ -239,22 +210,18 @@ function showHome(notice = ''): void {
     banners.push(`
       <section class="card welcome">
         <h2>처음이시네요</h2>
-        <p>훈련 전에 <b>사전 테스트</b>(144문제, 10분 정도)를 보면 8주 뒤에 얼마나 늘었는지 비교할 수 있어요.</p>
+        <p>훈련 전에 <b>사전 테스트</b>(144문제, 10분 정도)를 보면 나중에 얼마나 늘었는지 비교할 수 있어요.</p>
         <button class="secondary" data-act="test">사전 테스트 보기</button>
       </section>`);
   }
-  if (p.graduated) {
-    banners.push('<div class="notice good">졸업! 12음을 빠르고 정확하게 맞혔어요. 사후 테스트로 처음과 비교해 보세요.</div>');
-  } else if (total >= T.TOTAL_GOAL_MS && !hasPost) {
-    banners.push('<div class="notice good">25시간을 채웠어요. 사후 테스트로 처음과 비교해 보세요.</div>');
+  if (postTestDue()) {
+    banners.push(`<div class="notice good">졸업! 12음을 빠르고 정확하게 맞혔어요. 사후 테스트로 처음과 비교해 보세요. 훈련은 F 1단계부터 ${state.round}회차로 이어져요.</div>`);
   }
-  if (p.oneTake && !p.graduated) {
+  if (p.oneTake) {
     banners.push(`<div class="notice">마지막 레벨을 3번 연속 통과했어요. ${locked ? '12시간 쉰 다음' : '이제'} 한 번에 통과하면(원테이크) 졸업이에요.</div>`);
   }
 
-  const weekText = fresh ? '시작 전' : week <= T.PROGRAM_WEEKS ? `${week}주차 / 8주` : `8주 끝 (${week}주차)`;
-  const weekMs = week ? T.weekMs(state, week) : 0;
-  const left = Math.max(0, T.DAILY_GOAL_MS - today);
+  const left = Math.max(0, G.DAILY_GOAL - today);
 
   render('home', `
     <header class="top">
@@ -269,28 +236,26 @@ function showHome(notice = ''): void {
     </header>
     ${banners.join('')}
     <section class="card today">
-      ${ringSVG(today, sess < T.MIN_SESSION_MS ? sess : 0)}
+      ${ringSVG(today)}
       <div>
         <p class="eyebrow">오늘</p>
-        <h2>${left === 0 ? '오늘 목표 달성!' : `${minutes(left)} 더 하면 오늘 목표`}</h2>
-        <p class="muted">하루 25분 · 한 번에 15분 넘게 해야 기록에 들어가요.</p>
-        <p class="muted small" data-clock></p>
+        <h2>${left === 0 ? '오늘 목표 달성!' : `${left}번 더 하면 오늘 목표`}</h2>
+        <p class="muted">하루 레벨 ${G.DAILY_GOAL}번 도전 · 떨어진 레벨도 1번으로 세요.</p>
       </div>
     </section>
     <section class="card level">
       ${chromaSVG(p.n)}
       <div>
-        <p class="eyebrow">레벨 ${spec.global} / ${P.TOTAL_LEVELS}</p>
+        <p class="eyebrow">${state.round > 1 ? `${state.round}회차 · ` : ''}레벨 ${spec.global} / ${P.TOTAL_LEVELS}</p>
         <h2>음 ${p.n}개 · ${spec.level}/24단계</h2>
         <p class="muted">${next !== null ? `다음에 추가될 음: ${noteLabel(next)}` : '12음 전부 학습 중'}</p>
         <div class="actions">${train}</div>
       </div>
     </section>
     <section class="stats">
-      <div><span class="muted">기간</span><b>${weekText}</b></div>
-      <div><span class="muted">이번 주</span><b>${hoursMinutes(weekMs)}</b><small class="muted">주 2시간 이상</small></div>
-      <div><span class="muted">총 훈련</span><b>${hoursMinutes(total)}</b><small class="muted">/ 25시간</small></div>
-      <div><span class="muted">연속</span><b>${T.streakDays(state)}일</b></div>
+      <div><span class="muted">회차</span><b>${state.round}회차</b><small class="muted">졸업 ${state.graduations.length}번</small></div>
+      <div><span class="muted">연속</span><b>${G.streakDays(state.levelLog)}일</b><small class="muted">하루 ${G.DAILY_GOAL}번 채운 날</small></div>
+      <div><span class="muted">푼 문제</span><b>${state.totalTrials.toLocaleString()}</b></div>
       <div><span class="muted">점수</span><b>${state.points.toLocaleString()}</b></div>
       <div><span class="muted">토큰</span><b>${state.tokens}</b><small class="muted">10개 = 2배 찬스</small></div>
     </section>
@@ -314,7 +279,7 @@ function withSounds(timbres: Timbre[], fn: () => void): void {
 
 // 그 음을 세 옥타브에서 무작위 순서로 들려준다
 function playSample(pc: PitchClass): void {
-  touch();
+  shepardSkipLevel = null;
   A.stopAll();
   withSounds(['piano'], () => P.shuffle([...P.OCTAVES]).forEach((o, k) => A.playNote('piano', P.midiOf(pc, o), 0.05 + k)));
 }
@@ -325,9 +290,14 @@ function showPrep(): void {
   const spec = P.levelSpec(p.n, p.level);
   const set = P.pitchSet(p.n);
   const oob = P.outOfBound(p.n);
-  const oneTake = p.oneTake && !p.graduated;
+  const oneTake = p.oneTake;
   const newPc = p.level === 1 && p.n > 1 ? P.PITCH_ORDER[p.n - 1] : null;
   if (!spec.feedback) A.prepareShepard();
+  const shepardHint = spec.feedback
+    ? ''
+    : skipsShepard(spec)
+      ? `같은 레벨을 다시 하는 거라 셰퍼드 톤 없이 바로 시작해요. 샘플을 들으면 ${SHEPARD_SEC}초 셰퍼드 톤이 다시 나와요.`
+      : `시작하면 ${SHEPARD_SEC}초 동안 계속 내려가는 소리(셰퍼드 톤)가 먼저 나와요. 방금 들은 음의 기억을 지워서 상대음감으로 맞히지 못하게 하는 장치예요.`;
   const tokenNote = spec.isFinal
     ? '각 음의 마지막 단계라 2배 찬스가 없어요.'
     : state.tokens >= TOKENS_PER_DOUBLE
@@ -347,7 +317,7 @@ function showPrep(): void {
         <span class="chip">${spec.feedback ? '정답 알려줌' : '정답 안 알려줌'}</span>
         <span class="chip">${spec.trials}문제</span>
       </div>
-      ${spec.feedback ? '' : `<p class="hint">시작하면 ${SHEPARD_SEC}초 동안 계속 내려가는 소리(셰퍼드 톤)가 먼저 나와요. 방금 들은 음의 기억을 지워서 상대음감으로 맞히지 못하게 하는 장치예요.</p>`}
+      ${shepardHint ? `<p class="hint">${shepardHint}</p>` : ''}
       ${oob.length ? `<p class="hint">학습 중인 음 바깥의 음(${[...oob].sort(byPitch).map(noteName).join(', ')})도 섞여 나와요. 이런 음이면 <b>범위 밖</b>(Space)을 누르세요.</p>` : ''}
       <p class="hint">${tokenNote}</p>
     </section>
@@ -367,9 +337,8 @@ function showPrep(): void {
 function startLevel(): void {
   const p = state.progress;
   const spec = P.levelSpec(p.n, p.level);
-  const mode: LevelMode = p.graduated ? 'free' : p.oneTake ? 'oneTake' : 'level';
-  if (!state.startDate) state.startDate = T.dayKey(Date.now());
-  touch();
+  const mode: LevelMode = p.oneTake ? 'oneTake' : 'level';
+  if (!state.startDate) state.startDate = G.dayKey(Date.now());
   const trials = P.makeLevelTrials(p.n, spec.trials);
   const doubles = new Set<number>();
   let usesToken = false;
@@ -395,7 +364,9 @@ function startLevel(): void {
     onDone: (results) => finishLevel(spec, mode, results, doubles, usesToken),
     onQuit: quit,
   });
-  if (spec.feedback) run();
+  const skipShepard = skipsShepard(spec);
+  shepardSkipLevel = null;
+  if (spec.feedback || skipShepard) run();
   else shepardThen(run, quit);
 }
 
@@ -419,6 +390,7 @@ function finishLevel(spec: LevelSpec, mode: LevelMode, results: TrialResult[], d
   state.tokens += tokens;
   state.points += points;
   recordTrials(results);
+  shepardSkipLevel = spec.feedback ? null : spec.global;
   state.levelLog.push({ t: Date.now(), n: spec.n, level: spec.level, acc: Math.round(acc * 1000) / 1000, pass, mode });
   if (state.levelLog.length > LOG_LIMIT) state.levelLog.splice(0, state.levelLog.length - LOG_LIMIT);
 
@@ -426,13 +398,8 @@ function finishLevel(spec: LevelSpec, mode: LevelMode, results: TrialResult[], d
   if (mode === 'oneTake') {
     p.oneTake = false;
     p.lockUntil = null;
-    if (pass) {
-      p.graduated = true;
-      p.graduatedAt = Date.now();
-      out.graduated = true;
-    } else {
-      out.oneTakeFailed = true;
-    }
+    if (pass) out.graduated = true;
+    else out.oneTakeFailed = true;
   } else if (mode === 'level') {
     p.levelsSinceFocus += 1;
     p.failStreak = pass ? 0 : p.failStreak + 1;
@@ -456,6 +423,12 @@ function finishLevel(spec: LevelSpec, mode: LevelMode, results: TrialResult[], d
   }
   out.failStreak = p.failStreak;
   out.focusNext = mode === 'level' && !out.lockStarted && p.n >= FOCUS_MIN_PITCHES && p.levelsSinceFocus >= FOCUS_EVERY;
+  if (out.graduated) {
+    // 기록(점수·토큰·레벨 기록·테스트)은 그대로 두고 진도만 F 1단계로 돌려 다음 회차를 시작한다
+    state.graduations.push(Date.now());
+    state.round += 1;
+    state.progress = S.freshProgress();
+  }
   S.save(state);
   showLevelResult(spec, mode, results, out);
 }
@@ -496,7 +469,7 @@ function showLevelResult(spec: LevelSpec, mode: LevelMode, results: TrialResult[
   let detail = '';
   if (out.graduated) {
     headline = '졸업!';
-    detail = '원테이크까지 통과했어요. 12음을 빠르고 정확하게 맞힐 수 있게 됐어요.';
+    detail = `원테이크까지 통과했어요. 12음을 빠르고 정확하게 맞힐 수 있게 됐어요. 기록은 그대로 두고 F 1단계부터 ${state.round}회차를 시작해요.`;
   } else if (out.oneTakeFailed) {
     headline = '원테이크 실패';
     detail = '마지막 레벨을 다시 3번 연속 통과하면 원테이크에 또 도전할 수 있어요.';
@@ -584,7 +557,8 @@ function showFocusIntro(): void {
 function runFocus(weak: PitchClass, rtWindow: number): void {
   const p = state.progress;
   p.levelsSinceFocus = 0;
-  touch();
+  shepardSkipLevel = null; // 1부에서 정답을 알려준다
+  S.save(state);
   const set = P.pitchSet(p.n);
   const quit = () => showHome('집중 연습을 중단했어요.');
   const base = { name: 'train', rtWindow, timbre: 'piano' as const, activePcs: set, allowOut: false, doubles: new Set<number>(), training: true, onQuit: quit };
@@ -624,7 +598,6 @@ function finishFocus(weak: PitchClass, rtWindow: number, first: TrialResult[], s
 // ---------- 셰퍼드 톤 ----------
 
 function shepardThen(next: () => void, onQuit: () => void): void {
-  touch();
   let left = SHEPARD_SEC;
   render('shepard', `
     <section class="card center shepard">
@@ -642,7 +615,6 @@ function shepardThen(next: () => void, onQuit: () => void): void {
     if (el) el.textContent = String(left);
     if (left <= 0) {
       clearInterval(iv);
-      touch();
       next();
     }
   }, 1000);
@@ -766,7 +738,6 @@ function runTrials(cfg: RunConfig): void {
       cfg.onDone(results);
       return;
     }
-    if (cfg.training) touch();
     const t = cfg.trials[i];
     $orb.disabled = true;
     $orb.classList.remove('ready');
@@ -800,7 +771,6 @@ function runTrials(cfg: RunConfig): void {
     const rt = pc === null ? null : Math.round(now - cur.onset);
     const correct = pc === cur.t.answer && rt !== null && rt <= cfg.rtWindow;
     results.push({ midi: cur.t.midi, pc: cur.t.pc, answer: cur.t.answer, response: pc, rt, correct });
-    if (cfg.training && pc !== null) touch();
 
     const frozen = getComputedStyle($timer).transform;
     $timer.style.transition = 'none';
@@ -830,9 +800,15 @@ function runTrials(cfg: RunConfig): void {
 
 // ---------- 테스트 ----------
 
+// 마지막으로 졸업한 뒤 사후 테스트를 아직 안 봤는지
+function postTestDue(): boolean {
+  const graduated = state.graduations.at(-1);
+  return graduated !== undefined && !state.tests.some((t) => t.kind === 'post' && t.t > graduated);
+}
+
 function testKind(): TestKind {
   if (!state.startDate) return 'pre';
-  return state.progress.graduated || T.totalMs(state) >= T.TOTAL_GOAL_MS ? 'post' : 'mid';
+  return postTestDue() ? 'post' : 'mid';
 }
 
 function showTestIntro(): void {
@@ -848,7 +824,7 @@ function showTestIntro(): void {
         <li>12음 × 3옥타브(C4–B6). 연속된 두 음은 항상 한 옥타브보다 멀리 떨어져 나와요</li>
         <li>문제마다 ▶(Enter)를 눌러 음을 들어요. 음이 나온 뒤 5초 안에 답해야 하고, 정답은 알려주지 않아요. 반음만 틀려도 오답이에요</li>
         <li>악기나 튜너 같은 기준음은 쓰지 마세요. 헤드폰을 권해요</li>
-        <li>테스트 시간은 훈련 시간에 들어가지 않아요</li>
+        <li>테스트는 하루 목표(레벨 ${G.DAILY_GOAL}번)에 들어가지 않아요</li>
       </ul>
       <p class="hint">소리 크기는 잡음으로 맞춰요. 음높이 힌트가 되지 않게요.</p>
       <button class="secondary" data-act="noise">소리 크기 확인</button>
@@ -901,7 +877,7 @@ function finishTest(kind: TestKind, results: (TrialResult & { timbre: Timbre })[
   const entry: TestEntry = {
     t: Date.now(),
     kind,
-    trainedMs: T.totalMs(state),
+    round: state.round,
     level: P.levelSpec(p.n, p.level).global,
     ...P.scoreTest(results),
   };
@@ -948,31 +924,31 @@ function showTestResult(entry: TestEntry): void {
 
 function dailyChartSVG(): string {
   if (!state.startDate) return '<p class="muted">아직 훈련 기록이 없어요.</p>';
-  const totals = T.dailyTotals(state);
-  const days: { key: string; ms: number; label: string }[] = [];
+  const counts = G.dailyCounts(state.levelLog);
+  const days: { key: string; count: number; label: string }[] = [];
   const d = new Date();
   for (let k = 0; k < 56; k++) {
-    const key = T.dayKey(d);
-    days.unshift({ key, ms: totals.get(key) ?? 0, label: `${d.getMonth() + 1}/${d.getDate()}` });
+    const key = G.dayKey(d);
+    days.unshift({ key, count: counts.get(key) ?? 0, label: `${d.getMonth() + 1}/${d.getDate()}` });
     if (key <= state.startDate) break;
     d.setDate(d.getDate() - 1);
   }
   const w = 14;
   const h = 110;
-  const cap = 60 * 60000;
-  const goalY = h - (T.DAILY_GOAL_MS / cap) * h;
+  const cap = G.DAILY_GOAL * 2;
+  const goalY = h - (G.DAILY_GOAL / cap) * h;
   const bars = days.map((day, k) => {
-    const bh = (Math.min(day.ms, cap) / cap) * h;
-    const cls = day.ms >= T.DAILY_GOAL_MS ? 'met' : '';
+    const bh = (Math.min(day.count, cap) / cap) * h;
+    const cls = day.count >= G.DAILY_GOAL ? 'met' : '';
     const label = k % 7 === 0 ? `<text x="${k * w + w / 2}" y="${h + 16}" class="axis">${day.label}</text>` : '';
-    return `<rect x="${k * w + 2}" y="${h - bh}" width="${w - 4}" height="${Math.max(bh, day.ms ? 2 : 0)}" rx="2" class="${cls}"><title>${day.label} ${minutes(day.ms)}</title></rect>${label}`;
+    return `<rect x="${k * w + 2}" y="${h - bh}" width="${w - 4}" height="${Math.max(bh, day.count ? 2 : 0)}" rx="2" class="${cls}"><title>${day.label} ${day.count}번</title></rect>${label}`;
   }).join('');
   return `
     <svg viewBox="0 0 ${Math.max(days.length, 7) * w} ${h + 22}" class="daily" preserveAspectRatio="xMinYMin meet">
       <line x1="0" x2="${days.length * w}" y1="${goalY}" y2="${goalY}" class="goal"/>
       ${bars}
     </svg>
-    <p class="muted small">점선은 하루 목표 25분이에요. 15분 넘게 한 세션만 들어가요.</p>`;
+    <p class="muted small">점선은 하루 목표 레벨 ${G.DAILY_GOAL}번이에요. 떨어진 레벨도 1번으로 세요.</p>`;
 }
 
 function showRecords(): void {
@@ -985,7 +961,7 @@ function showRecords(): void {
       <td class="num">${pct(t.piano.correct)}</td>
       <td class="num">${t.piano.error.toFixed(2)}</td>
       <td class="num">${pct(t.guitar.correct)}</td>
-      <td class="num">${hoursMinutes(t.trainedMs)}</td>
+      <td class="num">${(t.round ?? 1) > 1 ? `${t.round}회차 · ` : ''}레벨 ${t.level}</td>
     </tr>`).join('');
   const recent = log.slice(-12).reverse().map((l) => `
     <tr>
@@ -997,11 +973,11 @@ function showRecords(): void {
   render('records', `
     <header class="bar"><button class="link" data-act="home">← 홈</button><span class="muted small" data-clock></span></header>
     <section class="card">
-      <h2>하루 훈련 시간</h2>
+      <h2>하루 레벨 도전</h2>
       ${dailyChartSVG()}
     </section>
     <section class="stats">
-      <div><span class="muted">총 훈련</span><b>${hoursMinutes(T.totalMs(state))}</b></div>
+      <div><span class="muted">회차</span><b>${state.round}회차</b><small class="muted">졸업 ${state.graduations.length}번</small></div>
       <div><span class="muted">푼 문제</span><b>${state.totalTrials.toLocaleString()}</b></div>
       <div><span class="muted">레벨 도전</span><b>${log.length}</b><small class="muted">통과 ${passed}</small></div>
     </section>
@@ -1009,7 +985,7 @@ function showRecords(): void {
       <h2>테스트</h2>
       ${tests ? `
         <table class="summary">
-          <thead><tr><th>날짜</th><th></th><th>피아노 정답률</th><th>평균 오차</th><th>기타 정답률</th><th>그때까지 훈련</th></tr></thead>
+          <thead><tr><th>날짜</th><th></th><th>피아노 정답률</th><th>평균 오차</th><th>기타 정답률</th><th>그때 진도</th></tr></thead>
           <tbody>${tests}</tbody>
         </table>` : '<p class="muted">아직 본 테스트가 없어요.</p>'}
     </section>
@@ -1031,9 +1007,7 @@ async function init(): Promise<void> {
     return;
   }
   S.onSaveError((err) => { document.getElementById('save-error')!.hidden = !err; });
-  if (T.endIdleSession(state)) S.save(state);
   showHome();
-  setInterval(tick, 1000);
   addEventListener('pagehide', () => S.flushOnExit());
   if (DEBUG) {
     window.moza = {
@@ -1041,7 +1015,7 @@ async function init(): Promise<void> {
       get trial() { return debugTrial; },
       get screen() { return screen; },
       P,
-      T,
+      G,
     };
   }
 }

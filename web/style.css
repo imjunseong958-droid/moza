@@ -157,7 +157,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ring { width: 120px; height: 120px; flex-shrink: 0; }
 .ring circle { fill: none; stroke-width: 10; stroke-linecap: round; }
 .ring .track { stroke: var(--surface-2); }
-.ring .pending { stroke: var(--accent-soft); }
 .ring .done { stroke: var(--accent); }
 .ring .ring-num { font-size: 30px; font-weight: 700; text-anchor: middle; fill: var(--text); }
 .ring .ring-sub { font-size: 12px; text-anchor: middle; fill: var(--muted); }
