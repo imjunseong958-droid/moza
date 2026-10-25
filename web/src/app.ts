@@ -181,7 +181,7 @@ function aboutHTML(): string {
       <ul>
         <li>F 한 음에서 시작해 옆 음을 아래·위 번갈아 하나씩 늘려 12음까지 가요. 음마다 24단계, 모두 288레벨이에요.</li>
         <li>하루 목표는 레벨 24번 도전이에요. 떨어진 레벨도 1번으로 세요. 처음에는 하루에 음 하나(24단계)를 끝내는 셈이고, 뒤로 갈수록 한 음에 며칠씩 걸려요.</li>
-        <li>음은 자동으로 나와요. 답하면 잠시 뒤 다음 음이 나오고, 기다리기 싫으면 Enter로 바로 넘어가요. 두 문제 연속 답이 없으면 멈추고 ▶(Enter)를 기다려요.</li>
+        <li>음은 자동으로 나와요. 답하면 잠시 뒤 다음 음이 나와요. 두 문제 연속 답이 없으면 멈추고, ▶(Enter)를 누르면 이어서 해요.</li>
         <li>단계가 오를수록 통과 기준이 20%에서 90%로 오르고 제한 시간이 줄어요. 마지막 단계는 음 1개일 때 1.18초, 12개일 때 2.03초예요.</li>
         <li>정답을 알려주는 레벨 다음에 알려주지 않는 레벨이 와요. 그 전에는 20초 셰퍼드 톤으로 방금 들은 음의 기억을 지워요. 같은 레벨을 다시 할 때는 샘플을 듣지 않았으면 건너뛰어요.</li>
         <li>학습 중인 음 바로 바깥의 음도 섞여 나와요. 그럴 땐 "범위 밖"을 눌러요.</li>
@@ -661,7 +661,7 @@ function trialHTML(cfg: RunConfig): string {
       <span class="count" data-count></span>
     </header>
     <section class="stage">
-      <button class="orb" data-act="play" data-orb aria-label="음 듣기">▶</button>
+      <button class="orb" data-act="play" data-orb aria-label="이어서 듣기" disabled>♪</button>
       <p class="orb-hint muted small" data-hint>&nbsp;</p>
       <div class="timer"><div class="timer-fill" data-timer></div></div>
       <p class="feedback" data-fb>&nbsp;</p>
@@ -676,12 +676,12 @@ function trialHTML(cfg: RunConfig): string {
 }
 
 // 문제를 하나씩 들려주고 답을 받는다. 음은 자동으로 나오고, 답하면 잠시 뒤 다음 음으로 넘어간다.
-// 기다리는 동안 ▶(Enter)를 누르면 바로 넘어간다. 반응 시간은 소리가 실제로 나온 순간부터 잰다.
+// 반응 시간은 소리가 실제로 나온 순간부터 잰다.
 function runTrials(cfg: RunConfig): void {
   const total = cfg.trials.length;
   const results: TrialResult[] = [];
   let i = 0;
-  let ready = false;     // ▶를 누를 수 있음
+  let paused = false;    // 자리를 비운 것으로 보고 ▶(Enter)를 기다리는 중
   let accepting = false; // 답을 받는 중
   let missed = 0;        // 연달아 답이 없었던 문제 수
   let cur: (A.Playback & { t: Trial }) | null = null;
@@ -690,13 +690,13 @@ function runTrials(cfg: RunConfig): void {
   let shownPoints = state.points;
 
   render(cfg.name, trialHTML(cfg), {
-    play: () => play(),
+    play: () => resume(),
     answer: ({ pc }) => respond(Number(pc)),
     quit: () => cfg.onQuit(),
   }, (e) => {
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
-      play();
+      resume();
       return;
     }
     if (e.code === 'Space' && cfg.allowOut) {
@@ -730,29 +730,33 @@ function runTrials(cfg: RunConfig): void {
     for (const b of app.querySelectorAll('.pressed, .right, .wrong, .reveal')) b.classList.remove('pressed', 'right', 'wrong', 'reveal');
   };
 
-  showReady(performance.now() + FIRST_TONE_MS);
+  schedule(performance.now() + FIRST_TONE_MS);
 
-  // ▶를 누를 수 있게 하고, at 시각에 다음 음(마지막 문제 뒤에는 결과)으로 넘어간다.
-  // at이 null이면 자리를 비운 것으로 보고 ▶를 누를 때까지 기다린다.
-  function showReady(at: number | null): void {
-    ready = true;
-    $orb.disabled = false;
-    $orb.classList.add('ready');
-    $orb.textContent = '▶';
+  // at 시각에 다음 음(마지막 문제 뒤에는 결과)으로 넘어간다.
+  // at이 null이면 자리를 비운 것으로 보고 ▶(Enter)를 누를 때까지 멈춘다.
+  function schedule(at: number | null): void {
     $count.textContent = `${Math.min(i + 1, total)} / ${total}`;
     const next = i >= total ? '결과' : i === 0 ? '첫 음' : '다음 음';
     if (at === null) {
+      paused = true;
+      $orb.disabled = false;
+      $orb.classList.add('ready');
+      $orb.textContent = '▶';
       $hint.textContent = `답이 없어서 멈췄어요 · 누르면 ${next} · Enter`;
       return;
     }
-    $hint.textContent = `곧 ${next} · 바로 넘어가려면 Enter`;
+    $hint.textContent = `곧 ${next}`;
     timer = setTimeout(play, Math.max(0, at - performance.now()));
   }
 
+  function resume(): void {
+    if (!paused || done) return;
+    paused = false;
+    play();
+  }
+
   function play(): void {
-    if (!ready || done) return;
-    ready = false;
-    clearTimeout(timer);
+    if (done) return;
     if (i >= total) {
       done = true;
       cfg.onDone(results);
@@ -816,7 +820,7 @@ function runTrials(cfg: RunConfig): void {
     $hint.textContent = ' ';
     missed = pc === null ? missed + 1 : 0;
     const at = missed >= AWAY_MISSES ? null : Math.max(now + (cfg.feedback ? FEEDBACK_GAP_MS : NEXT_GAP_MS), cur.end + AFTER_TONE_MS);
-    timer = setTimeout(() => showReady(at), Math.max(0, cur.end + AFTER_TONE_MS - performance.now()));
+    timer = setTimeout(() => schedule(at), Math.max(0, cur.end + AFTER_TONE_MS - performance.now()));
   }
 }
 
@@ -844,7 +848,7 @@ function showTestIntro(): void {
       <ul class="rules">
         <li>144문제: 피아노 72문제, 이어서 처음 듣는 기타 소리 72문제</li>
         <li>12음 × 3옥타브(C4–B6). 연속된 두 음은 항상 한 옥타브보다 멀리 떨어져 나와요</li>
-        <li>음은 자동으로 나와요(Enter로 바로 다음 음). 음이 나온 뒤 5초 안에 답해야 하고, 정답은 알려주지 않아요. 반음만 틀려도 오답이에요</li>
+        <li>음은 자동으로 나오고, 답하면 잠시 뒤 다음 음이 나와요. 음이 나온 뒤 5초 안에 답해야 하고, 정답은 알려주지 않아요. 반음만 틀려도 오답이에요</li>
         <li>악기나 튜너 같은 기준음은 쓰지 마세요. 헤드폰을 권해요</li>
         <li>테스트는 하루 목표(레벨 ${G.DAILY_GOAL}번)에 들어가지 않아요</li>
       </ul>
