@@ -1,7 +1,7 @@
 // 하루 목표 계산: 날짜별 레벨 도전 횟수, 연속 일수
 // 시간은 재지 않는다. 레벨을 끝까지 풀 때마다(통과든 실패든) 1번으로 센다.
 
-export const DAILY_GOAL = 40; // 하루 레벨 40번 도전
+export const DAILY_GOAL = 30; // 하루 레벨 30번 도전
 
 interface Attempt {
   t: number;
