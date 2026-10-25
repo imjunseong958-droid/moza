@@ -92,16 +92,16 @@ test('하루 도전 횟수는 날짜별로 센다', () => {
   assert.equal(G.todayCount(log, new Date('2026-10-26T08:00:00').getTime()), 0);
 });
 
-test('연속 일수는 하루 24번을 채운 날만 센다', () => {
+test('연속 일수는 하루 40번을 채운 날만 센다', () => {
   const log = [
-    ...attemptsOn('2026-10-21', 24),
-    ...attemptsOn('2026-10-22', 23),
-    ...attemptsOn('2026-10-23', 24),
-    ...attemptsOn('2026-10-24', 40),
+    ...attemptsOn('2026-10-21', 40),
+    ...attemptsOn('2026-10-22', 39),
+    ...attemptsOn('2026-10-23', 40),
+    ...attemptsOn('2026-10-24', 60),
   ];
   // 오늘(25일)은 아직 못 채웠으면 어제까지 센다
   assert.equal(G.streakDays([...log, ...attemptsOn('2026-10-25', 3)], new Date('2026-10-25T20:00:00').getTime()), 2);
-  assert.equal(G.streakDays([...log, ...attemptsOn('2026-10-25', 24)], new Date('2026-10-25T20:00:00').getTime()), 3);
+  assert.equal(G.streakDays([...log, ...attemptsOn('2026-10-25', 40)], new Date('2026-10-25T20:00:00').getTime()), 3);
   // 어제도 못 채웠으면 0
   assert.equal(G.streakDays(log, new Date('2026-10-26T20:00:00').getTime()), 0);
 });
