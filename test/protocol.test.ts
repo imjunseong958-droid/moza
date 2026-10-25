@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as P from '../web/src/protocol.ts';
-import * as T from '../web/src/time.ts';
+import * as G from '../web/src/goal.ts';
 
 test('음은 F에서 시작해 아래·위로 번갈아 추가된다', () => {
   assert.deepEqual(P.PITCH_ORDER.map((pc) => P.PC_NAMES[pc]), ['F', 'E', 'F#', 'D#', 'G', 'D', 'G#', 'C#', 'A', 'C', 'A#', 'B']);
@@ -81,23 +81,27 @@ test('테스트 채점: 무응답은 오차 3반음, 반음 오차는 원 위 �
   assert.equal(score.guitar.n, 0);
 });
 
-test('15분 미만 세션은 인정하지 않고, 3분 넘게 쉬면 새 세션이 된다', () => {
-  const state: T.TimeState = { startDate: null, session: null, sessions: [] };
-  const base = new Date('2026-10-24T09:00:00').getTime();
-  const min = 60_000;
-  for (let m = 0; m <= 14; m++) T.markActivity(state, base + m * min);
-  T.markActivity(state, base + 30 * min);
-  for (let m = 31; m <= 47; m++) T.markActivity(state, base + m * min);
-  T.endSession(state);
-  assert.deepEqual(state.sessions.map((s) => [s.active / min, s.counted]), [[14, false], [17, true]]);
-  assert.equal(T.totalMs(state), 17 * min);
-  assert.equal(T.dayMs(state, '2026-10-24'), 17 * min);
+// 그날 9시부터 1분 간격으로 count번 도전한 기록
+const attemptsOn = (day: string, count: number) =>
+  Array.from({ length: count }, (_, k) => ({ t: new Date(`${day}T09:00:00`).getTime() + k * 60_000 }));
+
+test('하루 도전 횟수는 날짜별로 센다', () => {
+  const log = [...attemptsOn('2026-10-24', 30), ...attemptsOn('2026-10-25', 5)];
+  assert.equal(G.dayCount(log, '2026-10-24'), 30);
+  assert.equal(G.todayCount(log, new Date('2026-10-25T20:00:00').getTime()), 5);
+  assert.equal(G.todayCount(log, new Date('2026-10-26T08:00:00').getTime()), 0);
 });
 
-test('주차는 첫 훈련일부터 센다', () => {
-  const state: T.TimeState = { startDate: '2026-10-24', session: null, sessions: [] };
-  assert.equal(T.programWeek(state, new Date('2026-10-30T23:00:00').getTime()), 1);
-  assert.equal(T.programWeek(state, new Date('2026-10-31T01:00:00').getTime()), 2);
-  assert.equal(T.programWeek(state, new Date('2026-12-18T12:00:00').getTime()), 8);
-  assert.equal(T.programWeek(state, new Date('2026-12-19T12:00:00').getTime()), 9);
+test('연속 일수는 하루 24번을 채운 날만 센다', () => {
+  const log = [
+    ...attemptsOn('2026-10-21', 24),
+    ...attemptsOn('2026-10-22', 23),
+    ...attemptsOn('2026-10-23', 24),
+    ...attemptsOn('2026-10-24', 40),
+  ];
+  // 오늘(25일)은 아직 못 채웠으면 어제까지 센다
+  assert.equal(G.streakDays([...log, ...attemptsOn('2026-10-25', 3)], new Date('2026-10-25T20:00:00').getTime()), 2);
+  assert.equal(G.streakDays([...log, ...attemptsOn('2026-10-25', 24)], new Date('2026-10-25T20:00:00').getTime()), 3);
+  // 어제도 못 채웠으면 0
+  assert.equal(G.streakDays(log, new Date('2026-10-26T20:00:00').getTime()), 0);
 });
