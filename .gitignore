@@ -2,3 +2,22 @@ node_modules/
 .claude/
 *.tmp
 .DS_Store
+
+# BEGIN Lim_claude: managed by lim.sh. Lets git track the Lim_claude files under .claude/.
+!.claude/
+.claude/*
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/commit-gate.sh
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/verify/
+.claude/skills/verify/*
+!.claude/skills/verify/SKILL.md
+!.claude/settings.json
+!.claude/lim_claude/
+.claude/lim_claude/*
+!.claude/lim_claude/manifest
+!.claude/verify.sh
+!.claude/lim_claude/AGENTS.md.orig
+# END Lim_claude
